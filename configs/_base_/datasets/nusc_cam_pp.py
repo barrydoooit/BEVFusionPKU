@@ -6,7 +6,7 @@ class_names = [
 evaluation = dict(interval=36)
 
 dataset_type = 'NuScenesDataset'
-data_root = 'data/nuscenes/'
+data_root = 'data/nuscenes'
 input_modality = dict(
     use_lidar=True,
     use_camera=True,
@@ -48,10 +48,10 @@ test_pipeline = [
         use_dim=5,
 
     ),
-    dict(
-        type='LoadPointsFromMultiSweeps',
-        sweeps_num=10,
-    ),
+    # dict(
+    #     type='LoadPointsFromMultiSweeps',
+    #     sweeps_num=10,
+    # ),
     dict(type='LoadMultiViewImageFromFiles'),
     dict(
         type='MultiScaleFlipAug3D',
@@ -70,7 +70,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=2,
+    samples_per_gpu=1,
     workers_per_gpu=6,
     train=dict(
             type=dataset_type,

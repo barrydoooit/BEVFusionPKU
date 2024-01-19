@@ -1,3 +1,4 @@
+import time
 import torch
 from mmcv.runner import force_fp32
 from torch.nn import functional as F
@@ -6,7 +7,7 @@ import numpy as np
 
 from mmdet.models import DETECTORS
 from mmdet3d.models.detectors import MVXFasterRCNN
-from .cam_stream_lss import LiftSplatShoot
+from .cam_stream_fast_lss import LiftSplatShoot
 from mmcv.cnn import (build_conv_layer, build_norm_layer, build_upsample_layer,
                       constant_init, is_norm, kaiming_init)
 from torchvision.utils import save_image
@@ -99,9 +100,13 @@ class BEVF_FasterRCNN(MVXFasterRCNN):
     
     def extract_feat(self, points, img, img_metas, gt_bboxes_3d=None):
         """Extract features from images and points."""
+        start_time = time.time()
         img_feats = self.extract_img_feat(img, img_metas)
+        print(f"[TIME] extract_img_feat: {time.time()-start_time:.2f}s")
+        time_check = time.time()
         pts_feats = self.extract_pts_feat(points, img_feats, img_metas)
-
+        print(f"[TIME] extract_pts_feat: {time.time()-time_check:.2f}s")
+        time_check = time.time()
         if self.lift:
             BN, C, H, W = img_feats[0].shape
             batch_size = BN//self.num_views
@@ -125,6 +130,7 @@ class BEVF_FasterRCNN(MVXFasterRCNN):
             
             img_bev_feat, depth_dist = self.lift_splat_shot_vis(img_feats_view, rots, trans, lidar2img_rt=lidar2img_rt, img_metas=img_metas)
             # print(img_bev_feat.shape, pts_feats[-1].shape)
+            print(f"[TIME] lift_splat_shot_vis: {time.time()-time_check:.2f}s")
             if pts_feats is None:
                 pts_feats = [img_bev_feat] ####cam stream only
             else:
@@ -134,6 +140,7 @@ class BEVF_FasterRCNN(MVXFasterRCNN):
                     pts_feats = [self.reduc_conv(torch.cat([img_bev_feat, pts_feats[0]], dim=1))]
                     if self.se:
                         pts_feats = [self.seblock(pts_feats[0])]
+            print(f"[TIME] Total Feature Extraction: {time.time()-start_time:.2f}s")
         return dict(
             img_feats = img_feats,
             pts_feats = pts_feats,

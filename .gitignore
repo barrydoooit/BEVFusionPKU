@@ -113,7 +113,7 @@ data
 *.pkl
 *.pkl.json
 *.log.json
-work_dirs/
+work_dirs
 exps/
 *~
 
@@ -127,3 +127,5 @@ exps/
 *.obj
 *.ply
 ossutil_output
+
+.dist_test

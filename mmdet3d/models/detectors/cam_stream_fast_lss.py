@@ -14,6 +14,7 @@ import math
 from torchvision.utils import save_image
 from mmdet3d.models.fusion_layers import apply_3d_transformation
 import torch.nn.functional as F
+from mmdet3d.custom.ops import bev_pool
 
 class Up(nn.Module):
     def __init__(self, in_channels, out_channels, scale_factor=2):
@@ -77,49 +78,49 @@ class BevEncode(nn.Module):
 def gen_dx_bx(xbound, ybound, zbound):
     dx = torch.Tensor([row[2] for row in [xbound, ybound, zbound]])
     bx = torch.Tensor([row[0] + row[2] / 2.0 for row in [xbound, ybound, zbound]])
-    nx = torch.LongTensor([(row[1] - row[0]) / row[2] for row in [xbound, ybound, zbound]])
+    nx = torch.LongTensor([round((row[1] - row[0]) / row[2]) for row in [xbound, ybound, zbound]])
 
     return dx, bx, nx
 
 
-def cumsum_trick(x, geom_feats, ranks):
-    x = x.cumsum(0)
-    kept = torch.ones(x.shape[0], device=x.device, dtype=torch.bool)
-    kept[:-1] = (ranks[1:] != ranks[:-1])
+# def cumsum_trick(x, geom_feats, ranks):
+#     x = x.cumsum(0)
+#     kept = torch.ones(x.shape[0], device=x.device, dtype=torch.bool)
+#     kept[:-1] = (ranks[1:] != ranks[:-1])
 
-    x, geom_feats = x[kept], geom_feats[kept]
-    x = torch.cat((x[:1], x[1:] - x[:-1]))
+#     x, geom_feats = x[kept], geom_feats[kept]
+#     x = torch.cat((x[:1], x[1:] - x[:-1]))
 
-    return x, geom_feats
+#     return x, geom_feats
 
 
-class QuickCumsum(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, geom_feats, ranks):
-        x = x.cumsum(0)
-        kept = torch.ones(x.shape[0], device=x.device, dtype=torch.bool)
-        kept[:-1] = (ranks[1:] != ranks[:-1])
+# class QuickCumsum(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx, x, geom_feats, ranks):
+#         x = x.cumsum(0)
+#         kept = torch.ones(x.shape[0], device=x.device, dtype=torch.bool)
+#         kept[:-1] = (ranks[1:] != ranks[:-1])
 
-        x, geom_feats = x[kept], geom_feats[kept]
-        x = torch.cat((x[:1], x[1:] - x[:-1]))
+#         x, geom_feats = x[kept], geom_feats[kept]
+#         x = torch.cat((x[:1], x[1:] - x[:-1]))
 
-        # save kept for backward
-        ctx.save_for_backward(kept)
+#         # save kept for backward
+#         ctx.save_for_backward(kept)
 
-        # no gradient for geom_feats
-        ctx.mark_non_differentiable(geom_feats)
+#         # no gradient for geom_feats
+#         ctx.mark_non_differentiable(geom_feats)
 
-        return x, geom_feats
+#         return x, geom_feats
 
-    @staticmethod
-    def backward(ctx, gradx, gradgeom):
-        kept, = ctx.saved_tensors
-        back = torch.cumsum(kept, 0)
-        back[kept] -= 1
+#     @staticmethod
+#     def backward(ctx, gradx, gradgeom):
+#         kept, = ctx.saved_tensors
+#         back = torch.cumsum(kept, 0)
+#         back[kept] -= 1
 
-        val = gradx[back]
+#         val = gradx[back]
 
-        return val, None, None
+#         return val, None, None
 
 
 class CamEncode(nn.Module):
@@ -187,30 +188,33 @@ class LiftSplatShoot(nn.Module):
         
 
         # toggle using QuickCumsum vs. autograd
-        self.use_quickcumsum = True
+        # self.use_quickcumsum = True
         z = self.grid_conf['zbound']
         cz = int(self.camC * ((z[1] - z[0]) // z[2]))
-        self.lss = lss
+        # self.lss = lss
+        # self.bevencode = nn.Sequential(
+        #     nn.Conv2d(cz, cz, kernel_size=3, padding=1, bias=False),
+        #     nn.BatchNorm2d(cz),
+        #     nn.ReLU(inplace=True),
+        #     nn.Conv2d(cz, 512, kernel_size=3, padding=1, bias=False),
+        #     nn.BatchNorm2d(512),
+        #     nn.ReLU(inplace=True),
+        #     nn.Conv2d(512, 512, kernel_size=3, padding=1, bias=False),
+        #     nn.BatchNorm2d(512),
+        #     nn.ReLU(inplace=True),
+        #     nn.Conv2d(512, inputC, kernel_size=3, padding=1, bias=False),
+        #     nn.BatchNorm2d(inputC),
+        #     nn.ReLU(inplace=True)
+        # )
+        # if self.lss:
+        # self.bevencode = nn.Sequential(
+        #     nn.Conv2d(cz, camC, kernel_size=1, padding=0, bias=False),
+        #     nn.BatchNorm2d(camC),
+        #     BevEncode(inC=camC, outC=inputC)
         self.bevencode = nn.Sequential(
-            nn.Conv2d(cz, cz, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(cz),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(cz, 512, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(512, inputC, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(inputC),
-            nn.ReLU(inplace=True)
-        )
-        if self.lss:
-          self.bevencode = nn.Sequential(
             nn.Conv2d(cz, camC, kernel_size=1, padding=0, bias=False),
             nn.BatchNorm2d(camC),
             BevEncode(inC=camC, outC=inputC)
-
         )
 
     def create_frustum(self):
@@ -270,7 +274,6 @@ class LiftSplatShoot(nn.Module):
         return x, depth
 
     def voxel_pooling(self, geom_feats, x):
-        # x.shape: [B, N, D, H, W, C] = [1, 6, 41, 112, 200, 64],
         B, N, D, H, W, C = x.shape
         Nprime = B * N * D * H * W
         batch_size = x.shape[0]
@@ -292,34 +295,21 @@ class LiftSplatShoot(nn.Module):
         x = x[kept]
         geom_feats = geom_feats[kept]
         # get tensors from the same voxel next to each other
-        ranks = geom_feats[:, 0] * (self.nx[1] * self.nx[2] * B) \
-                + geom_feats[:, 1] * (self.nx[2] * B) \
-                + geom_feats[:, 2] * B \
-                + geom_feats[:, 3]
-        sorts = ranks.argsort()
-        x, geom_feats, ranks = x[sorts], geom_feats[sorts], ranks[sorts]
-        # cumsum trick
-        if not self.use_quickcumsum:
-            x, geom_feats = cumsum_trick(x, geom_feats, ranks)
-        else:
-            x, geom_feats = QuickCumsum.apply(x, geom_feats, ranks) # x.shape: [275655, 64]
+        
+        final = bev_pool(x, geom_feats, batch_size, self.nx[2],self.nx[0], self.nx[1])
 
-        # griddify (B x C x Z x X x Y)
-        final = torch.zeros((B, C, self.nx[2], self.nx[0], self.nx[1]), device=x.device) # [1, 64, 16, 200, 200]
-        final[geom_feats[:, 3], :, geom_feats[:, 2], geom_feats[:, 0], geom_feats[:, 1]] = x
-        # B N D H W C
         return final
 
     def get_voxels(self, x, rots=None, trans=None, post_rots=None, post_trans=None,extra_rots=None,extra_trans=None):
-        geom = self.get_geometry(rots, trans, post_rots, post_trans,extra_rots,extra_trans) # shape: [B, N, D, H, W, 3] = [1, 6 41, 112, 200, 3]
-        x, depth = self.get_cam_feats(x) # x.shape: [B, N, D, H, W, C] = [1, 6, 41, 112, 200, 64], depth.shape: [B, N, D, H, W] = [1, 6, 41, 112, 200]
+        geom = self.get_geometry(rots, trans, post_rots, post_trans,extra_rots,extra_trans)
+        x, depth = self.get_cam_feats(x)
         x = self.voxel_pooling(geom, x)
-        return x, depth # x.shape: [B, C, Z, X, Y] = [1, 64, 16, 200, 200],
+        return x, depth
 
     def s2c(self, x):
         B, C, H, W, L = x.shape
-        bev = torch.reshape(x, (B, C*H, W, L)) # shape: [B, C*H, W, L] = [1, 64*16, 200, 200]
-        bev = bev.permute((0,1,3,2)) 
+        bev = torch.reshape(x, (B, C*H, W, L))
+        bev = bev.permute((0,1,3,2))
         return bev
 
     def forward(self, x, rots, trans, lidar2img_rt=None, img_metas=None, post_rots=None, post_trans=None, extra_rots=None,extra_trans=None):
